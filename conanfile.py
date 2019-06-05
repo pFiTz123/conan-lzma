@@ -16,7 +16,6 @@ class LZMAConan(ConanFile):
     settings = "os", "arch", "compiler", "build_type"
     options = {"shared": [True, False], "fPIC": [True, False]}
     default_options = {'shared': False, 'fPIC': True}
-    description = "LZMA library is part of XZ Utils"
     _source_subfolder = 'sources'
 
     @property
@@ -24,13 +23,25 @@ class LZMAConan(ConanFile):
         # Linux MinGW doesn't require MSYS2 bash obviously
         return self.settings.compiler == 'gcc' and self.settings.os == 'Windows' and os.name == 'nt'
 
+    @property
+    def _msvc_version(self):
+        switcher = {
+            13: "vs2013",
+            14: "vs2015",
+            15: "vs2017",
+            16: "vs2019"
+        }
+        version = int(self.settings.compiler.version.value)
+        return switcher.get(version, "Invalid compiler version")
+
+    @property
+    def _msvc_buildtype(self):
+        # treat 'RelWithDebInfo' and 'MinSizeRel' as 'Release'
+        return 'Debug' if self.settings.build_type == 'Debug' else 'Release'
+
     def build_requirements(self):
         if self._is_mingw_windows:
             self.build_requires("msys2_installer/latest@bincrafters/stable")
-
-    def _effective_msbuild_type(self):
-        # treat 'RelWithDebInfo' and 'MinSizeRel' as 'Release'
-        return 'Debug' if self.settings.build_type == 'Debug' else 'Release'
 
     def configure(self):
         del self.settings.compiler.libcxx
@@ -38,22 +49,17 @@ class LZMAConan(ConanFile):
             del self.options.fPIC
 
     def source(self):
-        archive_name = "xz-%s.tar.gz" % self.version
-        source_url = "https://tukaani.org/xz/%s" % archive_name
-        tools.get(source_url)
-        os.rename('xz-' + self.version, self._source_subfolder)
+        git = tools.Git(folder=self._source_subfolder)
+        git.clone("https://git.tukaani.org/xz.git", "master")
 
     def _build_msvc(self):
-        # windows\INSTALL-MSVC.txt
-        compiler_version = float(self.settings.compiler.version.value)
-        msvc_version = 'vs2017' if compiler_version >= 15 else 'vs2013'
-        with tools.chdir(os.path.join(self._source_subfolder, 'windows', msvc_version)):
+        with tools.chdir(os.path.join(self._source_subfolder, 'windows', self._msvc_version)):
             target = 'liblzma_dll' if self.options.shared else 'liblzma'
             msbuild = MSBuild(self)
             msbuild.build(
                 'xz_win.sln',
                 targets=[target],
-                build_type=self._effective_msbuild_type(),
+                build_type=self._msvc_buildtype,
                 platforms={'x86': 'Win32', 'x86_64': 'x64'},
                 use_env=False)
 
@@ -91,10 +97,8 @@ class LZMAConan(ConanFile):
             self.copy(pattern="*.h", dst="include", src=inc_dir, keep_path=True)
             arch = {'x86': 'Win32', 'x86_64': 'x64'}.get(str(self.settings.arch))
             target = 'liblzma_dll' if self.options.shared else 'liblzma'
-            compiler_version = float(self.settings.compiler.version.value)
-            msvc_version = 'vs2017' if compiler_version >= 15 else 'vs2013'
-            bin_dir = os.path.join(self._source_subfolder, 'windows', msvc_version,
-                                   str(self._effective_msbuild_type()), arch, target)
+            bin_dir = os.path.join(self._source_subfolder, 'windows', self._msvc_version,
+                                   str(self._msvc_buildtype), arch, target)
             self.copy(pattern="*.lib", dst="lib", src=bin_dir, keep_path=False)
             if self.options.shared:
                 self.copy(pattern="*.dll", dst="bin", src=bin_dir, keep_path=False)
@@ -104,5 +108,3 @@ class LZMAConan(ConanFile):
         if not self.options.shared:
             self.cpp_info.defines.append('LZMA_API_STATIC')
         self.cpp_info.libs = tools.collect_libs(self)
-        
-        
